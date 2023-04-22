@@ -7,9 +7,10 @@ import pyrtl
 
 
 # Initialize your memblocks here: 
-i_mem = pyrtl.MemBlock(...)
-d_mem = pyrtl.MemBlock(...)
-rf    = pyrtl.MemBlock(...)
+i_mem = pyrtl.MemBlock(bitwidth=32, addrwidth=32)
+d_mem = pyrtl.MemBlock(bitwidth=32, addrwidth=32, asynchronous=True)
+rf = pyrtl.MemBlock(bitwidth=32, addrwidth=5, asynchronous=True)
+pc = pyrtl.Register(bitwidth=32)
 
 # When working on large designs, such as this CPU implementation, it is
 # useful to partition your design into smaller, reusable, hardware
@@ -20,26 +21,179 @@ rf    = pyrtl.MemBlock(...)
 ## DECODER
 # decode the instruction
 
+
+instr = i_mem[pc]
+
+op = pyrtl.WireVector(bitwidth=6, name='op')
+rs = pyrtl.WireVector(bitwidth=5, name='rs')
+rt = pyrtl.WireVector(bitwidth=5, name='rt')
+rd = pyrtl.WireVector(bitwidth=5, name='rd')
+sh = pyrtl.WireVector(bitwidth=5, name='sh')
+func = pyrtl.WireVector(bitwidth=6, name='func')
+imm = pyrtl.WireVector(bitwidth=16, name='imm')
+addr = pyrtl.WireVector(bitwidth=26, name='addr')
+
+op <<= instr[26:32]
+rs <<= instr[21:26]
+rt <<= instr[16:21]
+rd <<= instr[11:16]
+sh <<= instr[6:11]
+func <<= instr[0:6]
+imm <<= instr[0:16]
+addr <<= instr[0:26]
+
 ## CONTROLLER
 # define control signals for the following instructions
 # add, and, addi, lui, ori, slt, lw, sw, beq
+REG_DST = pyrtl.WireVector(bitwidth=1, name='REG_DST')
+BRANCH = pyrtl.WireVector(bitwidth=1, name='BRANCH')
+REGWRITE = pyrtl.WireVector(bitwidth=1, name='REGWRITE')
+ALU_SRC = pyrtl.WireVector(bitwidth=2, name='ALU_SRC')
+MEM_WRITE = pyrtl.WireVector(bitwidth=1, name='MEM_WRITE')
+MEM_TO_REG = pyrtl.WireVector(bitwidth=1, name='MEM_TO_REG')
+ALU_OP = pyrtl.WireVector(bitwidth=3, name='ALU_OP')
+
+with pyrtl.conditional_assignment:
+   # r-types
+   with op == 0:
+      # Add
+      with func == 0x20:
+         REG_DST |= 1
+         BRANCH |= 0
+         REGWRITE |= 1
+         ALU_SRC |= 0
+         MEM_WRITE |= 0
+         MEM_TO_REG |= 0
+         ALU_OP |= 0
+      # And
+      with func == 0x24:
+         REG_DST |= 1
+         BRANCH |= 0
+         REGWRITE |= 1
+         ALU_SRC |= 00
+         MEM_WRITE |= 0
+         MEM_TO_REG |= 0
+         ALU_OP |= 1
+      # SLT
+      with func == 0x2a:
+         REG_DST |= 1
+         BRANCH |= 0
+         REGWRITE |= 1
+         ALU_SRC |= 0
+         MEM_WRITE |= 0
+         MEM_TO_REG |= 0
+         ALU_OP |= 4
+   # Addi
+   with op == 0x8:
+      REG_DST |= 0
+      BRANCH |= 0
+      REGWRITE |= 1
+      ALU_SRC |= 0
+      MEM_WRITE |= 0
+      MEM_TO_REG |= 0
+      ALU_OP |= 0
+   # Lui
+   with op == 0xf:
+      REG_DST |= 0
+      BRANCH |= 0
+      REGWRITE |= 1
+      ALU_SRC |= 1
+      MEM_WRITE |= 0
+      MEM_TO_REG |= 1
+      ALU_OP |= 2
+   # Ori
+   with op == 0xd:
+      REG_DST |= 0
+      BRANCH |= 0
+      REGWRITE |= 1
+      ALU_SRC |= 2
+      MEM_WRITE |= 0
+      MEM_TO_REG |= 1
+      ALU_OP |= 3
+   # Lw
+   with op == 0x23:
+      REG_DST |= 0
+      BRANCH |= 0
+      REGWRITE |= 1
+      ALU_SRC |= 1
+      MEM_WRITE |= 0
+      MEM_TO_REG |= 1
+      ALU_OP |= 0
+   # Sw
+   with op == 0x23:
+      BRANCH |= 0
+      REGWRITE |= 0
+      ALU_SRC |= 1
+      MEM_WRITE |= 1
+      ALU_OP |= 0
+   # Beq
+   with op == 0x23:
+      BRANCH |= 1
+      REGWRITE |= 0
+      ALU_SRC |= 00
+      MEM_WRITE |= 0
+      ALU_OP |= 5
+       
+      
 
 ## WRITE REGISTER mux
 # create the mux to choose among rd and rt for the write register
+write_reg = pyrtl.WireVector(bitwidth=32, name="write_reg")
+
+with pyrtl.conditional_assignment:
+   with REG_DST == 1:
+      rf[rd] |= write_reg
+   with REG_DST == 0:
+      rf[rt] |= write_reg
+
 
 ## READ REGISTER VALUES from the register file
 # read the values of rs and rt registers from the register file
+rdata1 = pyrtl.WireVector(bitwidth=32, name='rdata1')
+rdata2 = pyrtl.WireVector(bitwidth=32, name='rdata2')
+rdata1 <<= rf[rs]
+rdata2 <<= rf[rt]
 
 ## ALU INPUTS
 # define the ALU inputs after reading values of rs and rt registers from
 # the register file
-# Hint: Think about ALU inputs for instructions that use immediate values 
+# Hint: Think about ALU inputs for instructions that use immediate values
+alu_inpt1 = pyrtl.WireVector(bitwidth=32, name="alu_inpt1")
+alu_inpt2 = pyrtl.WireVector(bitwidth=32, name="alu_inpt2")
+
+alu_inpt1 <<= rdata1
+with pyrtl.conditional_assignment:
+   with ALU_SRC == 0:
+      alu_inpt2 |= rdata2
+   with ALU_SRC == 1:
+      alu_inpt2 |= imm.sign_extended(bitwidth=32)
+   with ALU_SRC == 2:
+      alu_inpt2 |= imm.zero_extended(bitwidth=32)
 
 ## FIND ALU OUTPUT
 # find what the ALU outputs are for the following instructions:
 # add, and, addi, lui, ori, slt, lw, sw, beq
 # Hint: you want to find both ALU result and zero. Refer the figure in the
 # lab document
+alu_out = pyrtl.WireVector(bitwidth=32, name="alu_out")
+
+with pyrtl.conditional_assignment:
+   with ALU_OP == 0:
+      alu_out |= alu_inpt1 + alu_inpt2
+   with ALU_OP == 1:
+      alu_out |= alu_inpt1 & alu_inpt2
+   with ALU_OP == 2:
+      alu_out |= alu_inpt1 + pyrtl.shift_left_logical(alu_inpt2, Const(16))
+   with ALU_OP == 3:
+      # Or
+      pass
+   with ALU_OP == 4:
+      # Slt
+      pass
+   with ALU_OP == 5:
+      # Sub
+      pass
+
 
 ## DATA MEMORY WRITE
 # perform the write operation in the data memory. Think about which 
@@ -53,6 +207,7 @@ rf    = pyrtl.MemBlock(...)
 ## PC UPDATE
 # finally update the program counter. Pay special attention when updating 
 # the PC in the case of a branch instruction. 
+pc.next <<= pc + 1
 
 
 if __name__ == '__main__':
