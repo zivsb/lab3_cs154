@@ -70,7 +70,7 @@ with pyrtl.conditional_assignment:
          REG_DST |= 1
          BRANCH |= 0
          REGWRITE |= 1
-         ALU_SRC |= 00
+         ALU_SRC |= 0
          MEM_WRITE |= 0
          MEM_TO_REG |= 0
          ALU_OP |= 1
@@ -88,7 +88,7 @@ with pyrtl.conditional_assignment:
       REG_DST |= 0
       BRANCH |= 0
       REGWRITE |= 1
-      ALU_SRC |= 0
+      ALU_SRC |= 1
       MEM_WRITE |= 0
       MEM_TO_REG |= 0
       ALU_OP |= 0
@@ -99,7 +99,7 @@ with pyrtl.conditional_assignment:
       REGWRITE |= 1
       ALU_SRC |= 1
       MEM_WRITE |= 0
-      MEM_TO_REG |= 1
+      MEM_TO_REG |= 0
       ALU_OP |= 2
    # Ori
    with op == 0xd:
@@ -108,7 +108,7 @@ with pyrtl.conditional_assignment:
       REGWRITE |= 1
       ALU_SRC |= 2
       MEM_WRITE |= 0
-      MEM_TO_REG |= 1
+      MEM_TO_REG |= 0
       ALU_OP |= 3
    # Lw
    with op == 0x23:
@@ -120,31 +120,36 @@ with pyrtl.conditional_assignment:
       MEM_TO_REG |= 1
       ALU_OP |= 0
    # Sw
-   with op == 0x23:
+   with op == 0x2b:
+      REG_DST |= 0
       BRANCH |= 0
       REGWRITE |= 0
       ALU_SRC |= 1
       MEM_WRITE |= 1
       ALU_OP |= 0
+      MEM_TO_REG |= 0
    # Beq
-   with op == 0x23:
+   with op == 0x4:
+      REG_DST |= 0
       BRANCH |= 1
       REGWRITE |= 0
       ALU_SRC |= 00
       MEM_WRITE |= 0
       ALU_OP |= 5
+      MEM_TO_REG |= 0
        
       
 
 ## WRITE REGISTER mux
 # create the mux to choose among rd and rt for the write register
-write_reg = pyrtl.WireVector(bitwidth=32, name="write_reg")
+write_reg = pyrtl.WireVector(bitwidth=5, name="write_reg")
+
 
 with pyrtl.conditional_assignment:
    with REG_DST == 1:
-      rf[rd] |= write_reg
+      write_reg |= rd 
    with REG_DST == 0:
-      rf[rt] |= write_reg
+      write_reg |= rt 
 
 
 ## READ REGISTER VALUES from the register file
@@ -176,6 +181,7 @@ with pyrtl.conditional_assignment:
 # Hint: you want to find both ALU result and zero. Refer the figure in the
 # lab document
 alu_out = pyrtl.WireVector(bitwidth=32, name="alu_out")
+alu_zero = pyrtl.WireVector(bitwidth=1, name="alu_zero")
 
 with pyrtl.conditional_assignment:
    with ALU_OP == 0:
@@ -186,121 +192,141 @@ with pyrtl.conditional_assignment:
       alu_out |= alu_inpt1 & alu_inpt2
    with ALU_OP == 2:
       # Lui
-      alu_out |= alu_inpt1 + pyrtl.shift_left_logical(alu_inpt2, pyrtl.Const(16))
+      alu_out |= pyrtl.shift_left_logical(alu_inpt2, pyrtl.Const(16))
    with ALU_OP == 3:
       # Or
       alu_out |= alu_inpt1 | alu_inpt2
    with ALU_OP == 4:
       # Slt
-      alu_out |= alu_inpt1 < alu_inpt2
+      alu_out |= pyrtl.signed_lt(alu_inpt1, alu_inpt2)
    with ALU_OP == 5:
       # Sub
       alu_out |= alu_inpt1 - alu_inpt2
+
+alu_zero <<= (alu_out == 0)
 
 
 ## DATA MEMORY WRITE
 # perform the write operation in the data memory. Think about which 
 # instructions will need to write to the data memory
 with pyrtl.conditional_assignment:
-   with MEM_WRITE == 0:
-      d_mem[alu_out] |= rdata2
+   with MEM_WRITE == 1:
+      d_mem[alu_out] |= pyrtl.MemBlock.EnabledWrite(rdata2, enable=True)
 
 ## REGISTER WRITEBACK
 # Create the mux to select between ALU result and data memory read.
 # Writeback the selected value to the register file in the 
 # appropriate write register
+
+
 with pyrtl.conditional_assignment:
-   with MEM_TO_REG == 1:
-      #Choose the mem read
-      write_reg |= d_mem[alu_out]
-   with MEM_TO_REG == 0:
-      # Choose ALU out 
-      write_reg |= alu_out
+   with REGWRITE == 1:
+      with MEM_TO_REG == 1:
+         #Choose the mem read
+         # rf[write_reg] |= d_mem[alu_out]
+         rf[write_reg] |= pyrtl.MemBlock.EnabledWrite(d_mem[alu_out], enable=True)
+      with MEM_TO_REG == 0:
+         # Choose ALU out 
+         rf[write_reg] |= alu_out
 
 ## PC UPDATE
 # finally update the program counter. Pay special attention when updating 
-# the PC in the case of a branch instruction. 
-pc.next <<= pc + 1
+# the PC in the case of a branch instruction.
+branchAnd = pyrtl.WireVector(bitwidth=1, name="branchAnd")
+branchAnd <<= alu_zero & BRANCH
+
+with pyrtl.conditional_assignment:
+   with branchAnd == 0:
+      pc.next |= pc + 1
+   with pyrtl.otherwise:
+      pc.next |= imm.sign_extended(bitwidth=32) + 1 + pc
+
 
 
 if __name__ == '__main__':
 
-    """
+      """
 
-    Here is how you can test your code.
-    This is very similar to how the autograder will test your code too.
+      Here is how you can test your code.
+      This is very similar to how the autograder will test your code too.
 
-    1. Write a MIPS program. It can do anything as long as it tests the
-       instructions you want to test.
+      1. Write a MIPS program. It can do anything as long as it tests the
+         instructions you want to test.
 
-    2. Assemble your MIPS program to convert it to machine code. Save
-       this machine code to the "i_mem_init.txt" file. You can use the 
-       "mips_to_hex.sh" file provided to assemble your MIPS program to 
-       corresponding hexadecimal instructions.  
-       You do NOT want to use QtSPIM for this because QtSPIM sometimes
-       assembles with errors. Another assembler you can use is the following:
+      2. Assemble your MIPS program to convert it to machine code. Save
+         this machine code to the "i_mem_init.txt" file. You can use the 
+         "mips_to_hex.sh" file provided to assemble your MIPS program to 
+         corresponding hexadecimal instructions.  
+         You do NOT want to use QtSPIM for this because QtSPIM sometimes
+         assembles with errors. Another assembler you can use is the following:
 
-       https://alanhogan.com/asu/assembler.php
+         https://alanhogan.com/asu/assembler.php
 
-    3. Initialize your i_mem (instruction memory).
+      3. Initialize your i_mem (instruction memory).
 
-    4. Run your simulation for N cycles. Your program may run for an unknown
-       number of cycles, so you may want to pick a large number for N so you
-       can be sure that all instructions of the program are executed.
+      4. Run your simulation for N cycles. Your program may run for an unknown
+         number of cycles, so you may want to pick a large number for N so you
+         can be sure that all instructions of the program are executed.
 
-    5. Test the values in the register file and memory to make sure they are
-       what you expect them to be.
+      5. Test the values in the register file and memory to make sure they are
+         what you expect them to be.
 
-    6. (Optional) Debug. If your code didn't produce the values you thought
-       they should, then you may want to call sim.render_trace() on a small
-       number of cycles to see what's wrong. You can also inspect the memory
-       and register file after every cycle if you wish.
+      6. (Optional) Debug. If your code didn't produce the values you thought
+         they should, then you may want to call sim.render_trace() on a small
+         number of cycles to see what's wrong. You can also inspect the memory
+         and register file after every cycle if you wish.
 
-    Some debugging tips:
+      Some debugging tips:
 
-        - Make sure your assembly program does what you think it does! You
-          might want to run it in a simulator somewhere else (SPIM, etc)
-          before debugging your PyRTL code.
+         - Make sure your assembly program does what you think it does! You
+            might want to run it in a simulator somewhere else (SPIM, etc)
+            before debugging your PyRTL code.
 
-        - Test incrementally. If your code doesn't work on the first try,
-          test each instruction one at a time.
+         - Test incrementally. If your code doesn't work on the first try,
+            test each instruction one at a time.
 
-        - Make use of the render_trace() functionality. You can use this to
-          print all named wires and registers, which is extremely helpful
-          for knowing when values are wrong.
+         - Make use of the render_trace() functionality. You can use this to
+            print all named wires and registers, which is extremely helpful
+            for knowing when values are wrong.
 
-        - Test only a few cycles at a time. This way, you don't have a huge
-          500 cycle trace to go through!
+         - Test only a few cycles at a time. This way, you don't have a huge
+            500 cycle trace to go through!
 
-    """
+      """
 
-    # Start a simulation trace
-    sim_trace = pyrtl.SimulationTrace()
+      # Start a simulation trace
+      sim_trace = pyrtl.SimulationTrace()
 
-    # Initialize the i_mem with your instructions.
-    i_mem_init = {}
-    with open('i_mem_init.txt', 'r') as fin:
-        i = 0
-        for line in fin.readlines():
+      # Initialize the i_mem with your instructions.
+      i_mem_init = {}
+      with open('i_mem_init.txt', 'r') as fin:
+         i = 0
+         for line in fin.readlines():
             i_mem_init[i] = int(line, 16)
             i += 1
 
-    sim = pyrtl.Simulation(tracer=sim_trace, memory_value_map={
-        i_mem : i_mem_init
-    })
+      sim = pyrtl.Simulation(tracer=sim_trace, memory_value_map={
+         i_mem : i_mem_init
+      })
 
-    # Run for an arbitrarily large number of cycles.
-    for cycle in range(500):
-        sim.step({})
+      # Run for an arbitrarily large number of cycles.
+      for cycle in range(500):
+         sim.step({})
 
-    # Use render_trace() to debug if your code doesn't work.
-    # sim_trace.render_trace()
+      # Use render_trace() to debug if your code doesn't work.
+      # sim_trace.render_trace()
 
-    # You can also print out the register file or memory like so if you want to debug:
-    # print(sim.inspect_mem(d_mem))
-    # print(sim.inspect_mem(rf))
+      # You can also print out the register file or memory like so if you want to debug:
+      print(sim.inspect_mem(d_mem))
+      print(sim.inspect_mem(rf))
 
-    # Perform some sanity checks to see if your program worked correctly
-   #  assert(sim.inspect_mem(d_mem)[0] == 10)
-   #  assert(sim.inspect_mem(rf)[8] == 10)    # $v0 = rf[8]
-    print('Passed!')
+      # Perform some sanity checks to see if your program worked correctly
+      assert(sim.inspect_mem(d_mem)[0] == 15)
+      assert(sim.inspect_mem(d_mem)[1] == 4294967254) # -42
+      assert(2 not in sim.inspect_mem(d_mem))
+      assert(sim.inspect_mem(rf)[12] == 4294967269) # -27
+      assert(sim.inspect_mem(rf)[13] == 1)
+      assert(sim.inspect_mem(rf)[14] == 0)
+      assert(sim.inspect_mem(rf)[17] == 4294967269)
+      assert(sim.inspect_mem(rf)[16] == 65536)
+      print('Passed!')
